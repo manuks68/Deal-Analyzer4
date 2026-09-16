@@ -3717,7 +3717,7 @@ async function cloudSignUpOrSignIn(){ const client=anuksSupabaseClient||initClou
 async function cloudSignOut(){ const client=anuksSupabaseClient||initCloudClient(); if(!client)return; try{await client.auth.signOut(); anuksCloudUser=null; setCloudStatus('Signed out. Local saving still works.','');}catch(e){console.warn('Cloud sign out failed:',e); setCloudStatus('Sign out failed.','bad');} }
 function cloudDealKey(deal){ const parts=[deal?.name||'',deal?.submarket||'',deal?.inputs?.purchasePrice||'',deal?.inputs?.units||'',deal?.cap||'',deal?.ppu||'']; return parts.join('|').toLowerCase().replace(/\s+/g,' ').trim()||('deal-'+Date.now()); }
 async function getCloudUser(){ const client=anuksSupabaseClient||initCloudClient(); if(!client)return null; if(anuksCloudUser)return anuksCloudUser; const {data}=await client.auth.getSession(); anuksCloudUser=data?.session?.user||null; return anuksCloudUser; }
-async function cloudAutoSaveDeal(deal){ try{ const client=anuksSupabaseClient||initCloudClient(); if(!client)return; const user=await getCloudUser(); if(!user){setCloudStatus('Deal saved locally. Sign in to also save to cloud.','');return;} const now=new Date().toISOString(); const key=cloudDealKey(deal); deal.user_id=user.id; deal.deal_key=key; deal.updated_at=now; const row={user_id:user.id,deal_key:key,name:deal?.name||'',submarket:deal?.submarket||'',data:deal,updated_at:now}; const {error}=await client.from('saved_deals').upsert(row,{onConflict:'deal_key'}); if(error)throw error; syncSavedDealsToLocalStorage(); setCloudStatus('Deal saved locally and to cloud database.','ok'); }catch(e){console.warn('Cloud auto-save failed:',e); setCloudStatus('Deal saved locally. Cloud save failed: '+(e.message||'check setup'),'bad');} }
+async function cloudAutoSaveDeal(deal){ try{ const client=anuksSupabaseClient||initCloudClient(); if(!client)return; const user=await getCloudUser(); if(!user){setCloudStatus('Deal saved locally. Sign in to also save to cloud.','');return;} const now=new Date().toISOString(); const key=cloudDealKey(deal); deal.user_id=user.id; deal.deal_key=key; deal.updated_at=now; const row={user_id:user.id,deal_key:key,name:deal?.name||'',submarket:deal?.submarket||'',data:deal,updated_at:now}; const {error}=await client.from('saved_deals').upsert(row,{onConflict:'user_id,deal_key'}); if(error)throw error; syncSavedDealsToLocalStorage(); setCloudStatus('Deal saved locally and to cloud database.','ok'); }catch(e){console.warn('Cloud auto-save failed:',e); setCloudStatus('Deal saved locally. Cloud save failed: '+(e.message||'check setup'),'bad');} }
 
 async function deleteDealFromCloud(deal){
   try{
@@ -3831,7 +3831,7 @@ async function uploadSavedDealsToCloud(){
             };
           });
 
-          const {error}=await client.from('saved_deals').upsert(rows,{onConflict:'deal_key'});
+          const {error}=await client.from('saved_deals').upsert(rows,{onConflict:'user_id,deal_key'});
           if(error) throw error;
 
           // Mark the successfully uploaded local copies as owned by this account.
