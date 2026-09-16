@@ -3710,10 +3710,87 @@ function setCloudStatus(message, state){
   setCloudStatusSilent(message,state||'');
   showTimedCloudMessage(message,state||'');
 }
-function saveCloudSettings(){ const url=(document.getElementById('supabaseUrl')?.value||'').trim(); const key=(document.getElementById('supabaseAnonKey')?.value||'').trim(); if(!url||!key){setCloudStatus('Enter your Supabase Project URL and anon public key first.','bad');return false;} localStorage.setItem('anuksSupabaseUrl',url); localStorage.setItem('anuksSupabaseAnonKey',key); initCloudClient(); setCloudStatus('Cloud settings saved. Sign in once; cloud deals will auto-load after sign-in.','ok'); setTimeout(async function(){ const user=await getCloudUser(); if(user) await downloadSavedDealsFromCloud(true); },100); return true; }
-function initCloudClient(){ try{ const url=(document.getElementById('supabaseUrl')?.value||localStorage.getItem('anuksSupabaseUrl')||'').trim(); const key=(document.getElementById('supabaseAnonKey')?.value||localStorage.getItem('anuksSupabaseAnonKey')||'').trim(); if(document.getElementById('supabaseUrl')&&url)document.getElementById('supabaseUrl').value=url; if(document.getElementById('supabaseAnonKey')&&key)document.getElementById('supabaseAnonKey').value=key; if(!url||!key||!window.supabase){setCloudStatusSilent('Cloud not connected yet. Local saving still works.','');return null;} anuksSupabaseClient=window.supabase.createClient(url,key); return anuksSupabaseClient; }catch(e){console.warn('Cloud client init failed:',e); setCloudStatusSilent('Cloud setup error. Check your URL/key.','bad'); return null;} }
+function saveCloudSettings(){ const url=(document.getElementById('supabaseUrl')?.value||'').trim(); const key=(document.getElementById('supabaseAnonKey')?.value||'').trim(); if(!url||!key){setCloudStatus('Enter your Supabase Project URL and anon public key first.','bad');return false;} localStorage.setItem('anuksSupabaseUrl',url); localStorage.setItem('anuksSupabaseAnonKey',key); anuksSupabaseClient=null; anuksCloudUser=null; initCloudClient(); setCloudStatus('Cloud settings saved. Sign in once; cloud deals will auto-load after sign-in.','ok'); setTimeout(async function(){ const user=await getCloudUser(); if(user) await downloadSavedDealsFromCloud(true); },100); return true; }
+function initCloudClient(){
+  try{
+    const url=(document.getElementById('supabaseUrl')?.value||localStorage.getItem('anuksSupabaseUrl')||'').trim();
+    const key=(document.getElementById('supabaseAnonKey')?.value||localStorage.getItem('anuksSupabaseAnonKey')||'').trim();
+
+    if(document.getElementById('supabaseUrl')&&url) document.getElementById('supabaseUrl').value=url;
+    if(document.getElementById('supabaseAnonKey')&&key) document.getElementById('supabaseAnonKey').value=key;
+
+    if(!url||!key||!window.supabase){
+      setCloudStatusSilent('Cloud not connected yet. Local saving still works.','');
+      return null;
+    }
+
+    // Do not recreate the client unnecessarily; doing so can complicate auth state.
+    if(anuksSupabaseClient) return anuksSupabaseClient;
+
+    anuksSupabaseClient=window.supabase.createClient(url,key,{
+      auth:{
+        persistSession:true,
+        autoRefreshToken:true,
+        detectSessionInUrl:true,
+        storage:window.localStorage
+      }
+    });
+    return anuksSupabaseClient;
+  }catch(e){
+    console.warn('Cloud client init failed:',e);
+    setCloudStatusSilent('Cloud setup error. Check your URL/key.','bad');
+    return null;
+  }
+}
 async function testCloudConnection(silent=false){ const statusFn=silent?setCloudStatusSilent:setCloudStatus; const client=anuksSupabaseClient||initCloudClient(); if(!client){statusFn('Cloud not configured. Enter Supabase URL/key first.','bad');return;} try{ const {data,error}=await client.auth.getSession(); if(error)throw error; anuksCloudUser=data?.session?.user||null; statusFn(anuksCloudUser?'Cloud connected and signed in.':'Cloud connected. Sign in to save deals to the database.', anuksCloudUser?'ok':''); }catch(e){console.warn('Cloud test failed:',e); statusFn('Cloud test failed. Check URL/key and Supabase setup.','bad');} }
-async function cloudSignUpOrSignIn(){ const client=anuksSupabaseClient||initCloudClient(); if(!client){setCloudStatus('Cloud not configured. Enter Supabase URL/key first.','bad');return;} const email=(document.getElementById('cloudEmail')?.value||'').trim(); const password=(document.getElementById('cloudPassword')?.value||'').trim(); if(!email||!password){setCloudStatus('Enter email and password.','bad');return;} try{ let result=await client.auth.signInWithPassword({email,password}); if(result.error) result=await client.auth.signUp({email,password}); if(result.error)throw result.error; anuksCloudUser=result.data?.user||result.data?.session?.user||null; if(!anuksCloudUser){const sessionResult=await client.auth.getSession(); anuksCloudUser=sessionResult.data?.session?.user||null;} if(anuksCloudUser){ setCloudStatus('Signed in. Auto-syncing cloud deals into Saved Deals...','ok'); await downloadSavedDealsFromCloud(true); } else { setCloudStatus('Account created. Check email if Supabase requires confirmation.',''); } }catch(e){console.warn('Cloud sign in failed:',e); setCloudStatus('Sign in failed: '+(e.message||'Check email/password and Supabase Auth settings.'),'bad');} }
+async function cloudSignUpOrSignIn(){
+  const client=anuksSupabaseClient||initCloudClient();
+  if(!client){
+    setCloudStatus('Cloud not configured. Enter Supabase URL/key first.','bad');
+    return;
+  }
+
+  const email=(document.getElementById('cloudEmail')?.value||'').trim();
+  const password=(document.getElementById('cloudPassword')?.value||'').trim();
+
+  if(!email||!password){
+    setCloudStatus('Enter email and password.','bad');
+    return;
+  }
+
+  try{
+    // IMPORTANT: Sign in only. Do NOT silently fall back to signUp.
+    // The old fallback could return a user object without a valid session,
+    // which made the app say "Signed in" even though RLS still saw the request as anon.
+    const {data,error}=await client.auth.signInWithPassword({email,password});
+    if(error) throw error;
+
+    if(!data?.session?.access_token || !data?.session?.user){
+      anuksCloudUser=null;
+      setCloudStatus('Sign in did not create an authenticated session. Check the Supabase user/email confirmation status.','bad');
+      return;
+    }
+
+    anuksCloudUser=data.session.user;
+
+    // Verify the persisted session before claiming success.
+    const verify=await client.auth.getSession();
+    if(verify.error) throw verify.error;
+    if(!verify.data?.session?.user){
+      anuksCloudUser=null;
+      setCloudStatus('Sign in was accepted, but the authenticated session was not retained. Please try again.','bad');
+      return;
+    }
+
+    anuksCloudUser=verify.data.session.user;
+    setCloudStatus('Signed in and authenticated. Auto-syncing cloud deals into Saved Deals...','ok');
+    await downloadSavedDealsFromCloud(true);
+  }catch(e){
+    anuksCloudUser=null;
+    console.warn('Cloud sign in failed:',e);
+    setCloudStatus('Sign in failed: '+(e.message||'Check email/password and Supabase Auth settings.'),'bad');
+  }
+}
 async function cloudSignOut(){ const client=anuksSupabaseClient||initCloudClient(); if(!client)return; try{await client.auth.signOut(); anuksCloudUser=null; setCloudStatus('Signed out. Local saving still works.','');}catch(e){console.warn('Cloud sign out failed:',e); setCloudStatus('Sign out failed.','bad');} }
 function cloudDealKey(deal){ const parts=[deal?.name||'',deal?.submarket||'',deal?.inputs?.purchasePrice||'',deal?.inputs?.units||'',deal?.cap||'',deal?.ppu||'']; return parts.join('|').toLowerCase().replace(/\s+/g,' ').trim()||('deal-'+Date.now()); }
 async function getCloudUser(){
