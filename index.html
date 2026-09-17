@@ -18,7 +18,7 @@
 <meta content="yes" name="apple-mobile-web-app-capable"/>
 <meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"/>
 <meta content="AnuksDealMobile Calc" name="apple-mobile-web-app-title"/>
-<meta content="2026.09.17.auth-recovery-cloud-final-v1" name="app-version"/>
+<meta content="2026.09.17.password-eye-v2" name="app-version"/>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <!-- Native mobile keyboard prediction enabled for Deal Name, Submarket, and Broker Name. Custom suggestion UI and keystroke capitalization removed to avoid interfering with iPhone keyboard suggestions. -->
 
@@ -488,6 +488,51 @@ body.full-actual-mode .quick-disabled-card,body.full-actual-mode .quick-disabled
 .cloud-auth-actions button:last-child{grid-column:1 / -1;}
 </style>
 
+
+<style id="password-eye-toggle-v2">
+.password-field-wrap{
+  position:relative;
+  width:100%;
+}
+.password-field-wrap input{
+  width:100%;
+  padding-right:46px !important;
+}
+.password-eye-btn{
+  position:absolute;
+  right:8px;
+  top:50%;
+  transform:translateY(-50%);
+  width:34px;
+  height:34px;
+  min-width:34px;
+  min-height:34px;
+  padding:0 !important;
+  margin:0 !important;
+  border:0 !important;
+  border-radius:6px !important;
+  background:transparent !important;
+  color:#64748b !important;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  z-index:5;
+  box-shadow:none !important;
+}
+.password-eye-btn:hover,
+.password-eye-btn:focus{
+  background:rgba(37,99,235,.08) !important;
+  color:#2563eb !important;
+  outline:none !important;
+}
+.password-eye-btn svg{
+  width:20px;
+  height:20px;
+  pointer-events:none;
+}
+</style>
+
 </head>
 <body>
 <div class="phone">
@@ -854,15 +899,15 @@ body.full-actual-mode .quick-disabled-card,body.full-actual-mode .quick-disabled
 <label class="cloud-mini-label">Login Email</label>
 <input autocapitalize="off" autocomplete="username" class="no-format cloud-text-field" id="cloudEmail" placeholder="your@email.com" spellcheck="false" type="email"/>
 <label class="cloud-mini-label">Login Password</label>
-<input autocomplete="current-password" class="no-format cloud-text-field" id="cloudPassword" placeholder="Password" type="password"/>
+<div class="password-field-wrap"><input autocomplete="current-password" class="no-format cloud-text-field" id="cloudPassword" placeholder="Password" type="password"/><button aria-label="Show password" title="Show password" class="password-eye-btn" onclick="togglePasswordVisibility('cloudPassword',this)" type="button"><svg aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12s3.75-6 9.75-6 9.75 6 9.75 6-3.75 6-9.75 6S2.25 12 2.25 12Z"/><circle cx="12" cy="12" r="2.75"/></svg></button></div>
 <div class="btns cloud-auth-actions" style="margin-top:10px;"><button class="secondary" onclick="cloudSignIn()" type="button">Sign In</button><button class="secondary" onclick="cloudSignOut()" type="button">Sign Out</button><button class="secondary" onclick="cloudCreateAccount()" type="button">Create Account</button></div>
 <button class="secondary" onclick="cloudResendConfirmation()" type="button" style="width:100%;margin-top:10px;">Resend Confirmation Email</button>
 <button class="secondary" onclick="cloudRequestPasswordReset()" type="button" style="width:100%;margin-top:10px;">Forgot Password / Send Reset Email</button>
 <div id="cloudPasswordRecoveryPanel" style="display:none;margin-top:12px;padding:12px;border:2px solid #2563eb;border-radius:8px;background:rgba(37,99,235,.08);">
   <div style="font-size:13px;font-weight:800;color:#dbeafe;margin-bottom:6px;">SET NEW CLOUD PASSWORD</div>
   <div class="cloud-small-note">You opened this app from a Supabase password-reset email. Enter your new password below.</div>
-  <input autocomplete="new-password" id="cloudNewPassword" placeholder="New password" type="password"/>
-  <input autocomplete="new-password" id="cloudNewPasswordConfirm" placeholder="Confirm new password" type="password" style="margin-top:8px;"/>
+  <div class="password-field-wrap"><input autocomplete="new-password" id="cloudNewPassword" placeholder="New password" type="password"/><button aria-label="Show password" title="Show password" class="password-eye-btn" onclick="togglePasswordVisibility('cloudNewPassword',this)" type="button"><svg aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12s3.75-6 9.75-6 9.75 6 9.75 6-3.75 6-9.75 6S2.25 12 2.25 12Z"/><circle cx="12" cy="12" r="2.75"/></svg></button></div>
+  <div class="password-field-wrap"><input autocomplete="new-password" id="cloudNewPasswordConfirm" placeholder="Confirm new password" type="password" style="margin-top:8px;"/><button aria-label="Show password" title="Show password" class="password-eye-btn" onclick="togglePasswordVisibility('cloudNewPasswordConfirm',this)" type="button"><svg aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12s3.75-6 9.75-6 9.75 6 9.75 6-3.75 6-9.75 6S2.25 12 2.25 12Z"/><circle cx="12" cy="12" r="2.75"/></svg></button></div>
   <button class="primary" onclick="cloudSetNewPassword()" type="button" style="width:100%;margin-top:10px;">Set New Password</button>
 </div>
 <details class="cloud-advanced-sync">
@@ -4443,7 +4488,7 @@ console.log('Functions available:', {
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./service-worker.js?v=2026.09.17.auth-recovery-cloud-final-v1', { updateViaCache: 'none' }).catch((err) => {
+    navigator.serviceWorker.register('./service-worker.js?v=2026.09.17.password-eye-v2', { updateViaCache: 'none' }).catch((err) => {
       console.error('Service worker registration failed:', err);
     });
   });
@@ -5544,6 +5589,27 @@ warning:"Very high cap rates may indicate operational or location risk."
     }
   };
 })();
+</script>
+
+
+<script id="password-eye-toggle-script-v2">
+function togglePasswordVisibility(inputId, button){
+  const input = document.getElementById(inputId);
+  if(!input) return;
+
+  const isVisible = input.type === 'text';
+  input.type = isVisible ? 'password' : 'text';
+
+  if(button){
+    const label = isVisible ? 'Show password' : 'Hide password';
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
+
+    button.innerHTML = isVisible
+      ? '<svg aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12s3.75-6 9.75-6 9.75 6 9.75 6-3.75 6-9.75 6S2.25 12 2.25 12Z"/><circle cx="12" cy="12" r="2.75"/></svg>'
+      : '<svg aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m3 3 18 18"/><path stroke-linecap="round" stroke-linejoin="round" d="M10.6 6.2A11.7 11.7 0 0 1 12 6c6 0 9.75 6 9.75 6a16.5 16.5 0 0 1-2.7 3.2M6.2 6.2C3.8 8 2.25 12 2.25 12s3.75 6 9.75 6c1.4 0 2.7-.3 3.8-.8"/><path stroke-linecap="round" stroke-linejoin="round" d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
+  }
+}
 </script>
 
 </body>
