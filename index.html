@@ -852,7 +852,7 @@ body.full-actual-mode .quick-disabled-card,body.full-actual-mode .quick-disabled
 <input autocapitalize="off" autocomplete="username" class="no-format cloud-text-field" id="cloudEmail" placeholder="your@email.com" spellcheck="false" type="email"/>
 <label class="cloud-mini-label">Login Password</label>
 <input autocomplete="current-password" class="no-format cloud-text-field" id="cloudPassword" placeholder="Password" type="password"/>
-<div class="btns" style="margin-top:10px;"><button class="secondary" onclick="cloudSignUpOrSignIn()" type="button">Sign In / Create Login</button><button class="secondary" onclick="cloudSignOut()" type="button">Sign Out</button></div>
+<div class="btns" style="margin-top:10px;"><button class="secondary" onclick="cloudSignIn()" type="button">Sign In</button><button class="secondary" onclick="cloudCreateAccount()" type="button">Create Account</button><button class="secondary" onclick="cloudSignOut()" type="button">Sign Out</button></div>
 <details class="cloud-advanced-sync">
 <summary><span>Advanced Manual Sync</span><span>▾</span></summary>
 <div class="cloud-advanced-body">
@@ -1830,6 +1830,7 @@ function saveDeal(){
         savedDeals[duplicateIndex] = updatedDeal;
         renderSavedDeals();
         persistState();
+        syncSavedDealsToLocalStorage();
         if (typeof cloudAutoSaveDeal === 'function') cloudAutoSaveDeal(savedDeals[duplicateIndex]);
         showMessage('Deal overridden successfully.');
       }
@@ -1844,6 +1845,7 @@ function saveDeal(){
         savedDeals.push(newDeal);
         renderSavedDeals();
         persistState();
+        syncSavedDealsToLocalStorage();
         if (typeof cloudAutoSaveDeal === 'function') cloudAutoSaveDeal(newDeal);
         showMessage('Deal saved successfully.');
       }
@@ -3743,7 +3745,7 @@ function initCloudClient(){
   }
 }
 async function testCloudConnection(silent=false){ const statusFn=silent?setCloudStatusSilent:setCloudStatus; const client=anuksSupabaseClient||initCloudClient(); if(!client){statusFn('Cloud not configured. Enter Supabase URL/key first.','bad');return;} try{ const {data,error}=await client.auth.getSession(); if(error)throw error; anuksCloudUser=data?.session?.user||null; statusFn(anuksCloudUser?'Cloud connected and signed in.':'Cloud connected. Sign in to save deals to the database.', anuksCloudUser?'ok':''); }catch(e){console.warn('Cloud test failed:',e); statusFn('Cloud test failed. Check URL/key and Supabase setup.','bad');} }
-async function cloudSignUpOrSignIn(){
+async function cloudSignIn(){
   const client=anuksSupabaseClient||initCloudClient();
   if(!client){
     setCloudStatus('Cloud not configured. Enter Supabase URL/key first.','bad');
@@ -3759,9 +3761,6 @@ async function cloudSignUpOrSignIn(){
   }
 
   try{
-    // IMPORTANT: Sign in only. Do NOT silently fall back to signUp.
-    // The old fallback could return a user object without a valid session,
-    // which made the app say "Signed in" even though RLS still saw the request as anon.
     const {data,error}=await client.auth.signInWithPassword({email,password});
     if(error) throw error;
 
@@ -3771,9 +3770,6 @@ async function cloudSignUpOrSignIn(){
       return;
     }
 
-    anuksCloudUser=data.session.user;
-
-    // Verify the persisted session before claiming success.
     const verify=await client.auth.getSession();
     if(verify.error) throw verify.error;
     if(!verify.data?.session?.user){
@@ -3790,6 +3786,59 @@ async function cloudSignUpOrSignIn(){
     console.warn('Cloud sign in failed:',e);
     setCloudStatus('Sign in failed: '+(e.message||'Check email/password and Supabase Auth settings.'),'bad');
   }
+}
+
+async function cloudCreateAccount(){
+  const client=anuksSupabaseClient||initCloudClient();
+  if(!client){
+    setCloudStatus('Cloud not configured. Enter Supabase URL/key first.','bad');
+    return;
+  }
+
+  const email=(document.getElementById('cloudEmail')?.value||'').trim();
+  const password=(document.getElementById('cloudPassword')?.value||'').trim();
+
+  if(!email||!password){
+    setCloudStatus('Enter email and password to create an account.','bad');
+    return;
+  }
+
+  try{
+    const {data,error}=await client.auth.signUp({email,password});
+    if(error) throw error;
+
+    if(data?.user && !data.session){
+      setCloudStatus('Account created. Check your email to confirm the signup, then sign in.','ok');
+      return;
+    }
+
+    if(!data?.session?.access_token || !data?.session?.user){
+      anuksCloudUser=null;
+      setCloudStatus('Account created, but no authenticated session was returned. Please sign in after confirming your email.','bad');
+      return;
+    }
+
+    anuksCloudUser=data.session.user;
+    const verify=await client.auth.getSession();
+    if(verify.error) throw verify.error;
+    if(!verify.data?.session?.user){
+      anuksCloudUser=null;
+      setCloudStatus('Account was created, but the session was not retained. Please sign in again.','bad');
+      return;
+    }
+
+    anuksCloudUser=verify.data.session.user;
+    setCloudStatus('Account created and signed in. Auto-syncing cloud deals into Saved Deals...','ok');
+    await downloadSavedDealsFromCloud(true);
+  }catch(e){
+    anuksCloudUser=null;
+    console.warn('Cloud account creation failed:',e);
+    setCloudStatus('Account creation failed: '+(e.message||'Check email/password and Supabase Auth settings.'),'bad');
+  }
+}
+
+async function cloudSignUpOrSignIn(){
+  return cloudSignIn();
 }
 async function cloudSignOut(){ const client=anuksSupabaseClient||initCloudClient(); if(!client)return; try{await client.auth.signOut(); anuksCloudUser=null; setCloudStatus('Signed out. Local saving still works.','');}catch(e){console.warn('Cloud sign out failed:',e); setCloudStatus('Sign out failed.','bad');} }
 function cloudDealKey(deal){ const parts=[deal?.name||'',deal?.submarket||'',deal?.inputs?.purchasePrice||'',deal?.inputs?.units||'',deal?.cap||'',deal?.ppu||'']; return parts.join('|').toLowerCase().replace(/\s+/g,' ').trim()||('deal-'+Date.now()); }
@@ -3810,6 +3859,11 @@ async function getCloudUser(){
 async function cloudAutoSaveDeal(deal){
   try{
     const client=anuksSupabaseClient||initCloudClient();
+    if(!deal) return;
+
+    // Always persist a local copy first so the data is not lost if cloud sync fails.
+    syncSavedDealsToLocalStorage();
+
     if(!client) return;
 
     const user=await getCloudUser();
