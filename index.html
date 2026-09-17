@@ -18,7 +18,7 @@
 <meta content="yes" name="apple-mobile-web-app-capable"/>
 <meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"/>
 <meta content="AnuksDealMobile Calc" name="apple-mobile-web-app-title"/>
-<meta content="2026.09.16.cloud-sync-local-claim-v1" name="app-version"/>
+<meta content="2026.09.17.auth-recovery-cloud-final-v1" name="app-version"/>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <!-- Native mobile keyboard prediction enabled for Deal Name, Submarket, and Broker Name. Custom suggestion UI and keystroke capitalization removed to avoid interfering with iPhone keyboard suggestions. -->
 
@@ -484,6 +484,9 @@ body.full-actual-mode .quick-disabled-card,body.full-actual-mode .quick-disabled
 @keyframes cloudPopupTimer{from{transform:scaleX(1)}to{transform:scaleX(0)}}
 @media(max-width:420px){.cloud-timed-modal{width:100%;padding:18px;}}
 </style>
+<style>
+.cloud-auth-actions button:last-child{grid-column:1 / -1;}
+</style>
 
 </head>
 <body>
@@ -852,7 +855,16 @@ body.full-actual-mode .quick-disabled-card,body.full-actual-mode .quick-disabled
 <input autocapitalize="off" autocomplete="username" class="no-format cloud-text-field" id="cloudEmail" placeholder="your@email.com" spellcheck="false" type="email"/>
 <label class="cloud-mini-label">Login Password</label>
 <input autocomplete="current-password" class="no-format cloud-text-field" id="cloudPassword" placeholder="Password" type="password"/>
-<div class="btns" style="margin-top:10px;"><button class="secondary" onclick="cloudSignIn()" type="button">Sign In</button><button class="secondary" onclick="cloudCreateAccount()" type="button">Create Account</button><button class="secondary" onclick="cloudSignOut()" type="button">Sign Out</button></div>
+<div class="btns cloud-auth-actions" style="margin-top:10px;"><button class="secondary" onclick="cloudSignIn()" type="button">Sign In</button><button class="secondary" onclick="cloudSignOut()" type="button">Sign Out</button><button class="secondary" onclick="cloudCreateAccount()" type="button">Create Account</button></div>
+<button class="secondary" onclick="cloudResendConfirmation()" type="button" style="width:100%;margin-top:10px;">Resend Confirmation Email</button>
+<button class="secondary" onclick="cloudRequestPasswordReset()" type="button" style="width:100%;margin-top:10px;">Forgot Password / Send Reset Email</button>
+<div id="cloudPasswordRecoveryPanel" style="display:none;margin-top:12px;padding:12px;border:2px solid #2563eb;border-radius:8px;background:rgba(37,99,235,.08);">
+  <div style="font-size:13px;font-weight:800;color:#dbeafe;margin-bottom:6px;">SET NEW CLOUD PASSWORD</div>
+  <div class="cloud-small-note">You opened this app from a Supabase password-reset email. Enter your new password below.</div>
+  <input autocomplete="new-password" id="cloudNewPassword" placeholder="New password" type="password"/>
+  <input autocomplete="new-password" id="cloudNewPasswordConfirm" placeholder="Confirm new password" type="password" style="margin-top:8px;"/>
+  <button class="primary" onclick="cloudSetNewPassword()" type="button" style="width:100%;margin-top:10px;">Set New Password</button>
+</div>
 <details class="cloud-advanced-sync">
 <summary><span>Advanced Manual Sync</span><span>▾</span></summary>
 <div class="cloud-advanced-body">
@@ -3679,7 +3691,9 @@ window.addEventListener('beforeunload', function(){
    LocalStorage remains the primary offline fallback.
    ========================================================= */
 let anuksSupabaseClient = null;
+let anuksSupabaseConfig = null;
 let anuksCloudUser = null;
+let anuksAuthSubscription = null;
 let anuksCloudPopupTimer=null;
 function showTimedCloudMessage(message,state){
   const existing=document.querySelector('.cloud-timed-overlay');
@@ -3712,7 +3726,7 @@ function setCloudStatus(message, state){
   setCloudStatusSilent(message,state||'');
   showTimedCloudMessage(message,state||'');
 }
-function saveCloudSettings(){ const url=(document.getElementById('supabaseUrl')?.value||'').trim(); const key=(document.getElementById('supabaseAnonKey')?.value||'').trim(); if(!url||!key){setCloudStatus('Enter your Supabase Project URL and anon public key first.','bad');return false;} localStorage.setItem('anuksSupabaseUrl',url); localStorage.setItem('anuksSupabaseAnonKey',key); anuksSupabaseClient=null; anuksCloudUser=null; initCloudClient(); setCloudStatus('Cloud settings saved. Sign in once; cloud deals will auto-load after sign-in.','ok'); setTimeout(async function(){ const user=await getCloudUser(); if(user) await downloadSavedDealsFromCloud(true); },100); return true; }
+function saveCloudSettings(){ const url=(document.getElementById('supabaseUrl')?.value||'').trim(); const key=(document.getElementById('supabaseAnonKey')?.value||'').trim(); if(!url||!key){setCloudStatus('Enter your Supabase Project URL and anon public key first.','bad');return false;} localStorage.setItem('anuksSupabaseUrl',url); localStorage.setItem('anuksSupabaseAnonKey',key); anuksSupabaseClient=null; anuksSupabaseConfig=null; anuksCloudUser=null; initCloudClient(); setCloudStatus('Cloud settings saved. Sign in once; cloud deals will auto-load after sign-in.','ok'); setTimeout(async function(){ const user=await getCloudUser(); if(user) await downloadSavedDealsFromCloud(true); },100); return true; }
 function initCloudClient(){
   try{
     const url=(document.getElementById('supabaseUrl')?.value||localStorage.getItem('anuksSupabaseUrl')||'').trim();
@@ -3726,8 +3740,7 @@ function initCloudClient(){
       return null;
     }
 
-    // Do not recreate the client unnecessarily; doing so can complicate auth state.
-    if(anuksSupabaseClient) return anuksSupabaseClient;
+    if(anuksSupabaseClient && anuksSupabaseConfig?.url===url && anuksSupabaseConfig?.key===key) return anuksSupabaseClient;
 
     anuksSupabaseClient=window.supabase.createClient(url,key,{
       auth:{
@@ -3737,6 +3750,28 @@ function initCloudClient(){
         storage:window.localStorage
       }
     });
+    anuksSupabaseConfig={url,key};
+
+    // Listen for a recovery session created when the user opens a Supabase reset-email link.
+    if(anuksAuthSubscription){
+      try{ anuksAuthSubscription.unsubscribe(); }catch(_e){}
+      anuksAuthSubscription=null;
+    }
+    const authListener=anuksSupabaseClient.auth.onAuthStateChange((event,session)=>{
+      anuksCloudUser=session?.user||null;
+      if(event==='PASSWORD_RECOVERY'){
+        setTimeout(()=>{
+          const panel=document.getElementById('cloudPasswordRecoveryPanel');
+          if(panel){
+            panel.style.display='block';
+            panel.scrollIntoView({behavior:'smooth',block:'center'});
+          }
+          setCloudStatus('Password recovery verified. Enter and confirm your new password below.','ok');
+        },0);
+      }
+    });
+    anuksAuthSubscription=authListener?.data?.subscription||null;
+
     return anuksSupabaseClient;
   }catch(e){
     console.warn('Cloud client init failed:',e);
@@ -3753,10 +3788,14 @@ async function cloudSignIn(){
   }
 
   const email=(document.getElementById('cloudEmail')?.value||'').trim();
-  const password=(document.getElementById('cloudPassword')?.value||'').trim();
+  const password=document.getElementById('cloudPassword')?.value||'';
 
-  if(!email||!password){
-    setCloudStatus('Enter email and password.','bad');
+  if(!email){
+    setCloudStatus('Enter email.','bad');
+    return;
+  }
+  if(!password.trim()){
+    setCloudStatus('Enter password.','bad');
     return;
   }
 
@@ -3788,6 +3827,92 @@ async function cloudSignIn(){
   }
 }
 
+
+function cloudAuthRedirectUrl(){
+  // Always return auth emails to the currently deployed app, not an old Netlify site.
+  return window.location.origin + window.location.pathname;
+}
+
+async function cloudRequestPasswordReset(){
+  const client=anuksSupabaseClient||initCloudClient();
+  if(!client){
+    setCloudStatus('Cloud not configured. Enter your Supabase URL and anon public key first.','bad');
+    return;
+  }
+
+  const email=(document.getElementById('cloudEmail')?.value||'').trim();
+  if(!email){
+    setCloudStatus('Enter your cloud email first, then press Forgot Password.','bad');
+    return;
+  }
+
+  try{
+    const {error}=await client.auth.resetPasswordForEmail(email,{
+      redirectTo:cloudAuthRedirectUrl()
+    });
+    if(error) throw error;
+    setCloudStatus('Password reset email requested. Use the newest email. Its link will return to this app.','ok');
+  }catch(e){
+    console.warn('Password reset request failed:',e);
+    setCloudStatus('Password reset request failed: '+(e.message||'Check Supabase email settings or rate limit.'),'bad');
+  }
+}
+
+async function cloudSetNewPassword(){
+  const client=anuksSupabaseClient||initCloudClient();
+  if(!client){
+    setCloudStatus('Cloud not configured.','bad');
+    return;
+  }
+
+  const p1=document.getElementById('cloudNewPassword')?.value||'';
+  const p2=document.getElementById('cloudNewPasswordConfirm')?.value||'';
+
+  if(p1.length<6){
+    setCloudStatus('New password must be at least 6 characters.','bad');
+    return;
+  }
+  if(p1!==p2){
+    setCloudStatus('The two new-password entries do not match.','bad');
+    return;
+  }
+
+  try{
+    const sessionCheck=await client.auth.getSession();
+    if(sessionCheck.error) throw sessionCheck.error;
+    if(!sessionCheck.data?.session){
+      setCloudStatus('The password-reset session is missing or expired. Request a new reset email.','bad');
+      return;
+    }
+
+    const {data,error}=await client.auth.updateUser({password:p1});
+    if(error) throw error;
+
+    anuksCloudUser=data?.user||sessionCheck.data.session.user||null;
+
+    const loginPassword=document.getElementById('cloudPassword');
+    if(loginPassword) loginPassword.value='';
+
+    const np=document.getElementById('cloudNewPassword');
+    const npc=document.getElementById('cloudNewPasswordConfirm');
+    if(np) np.value='';
+    if(npc) npc.value='';
+
+    const panel=document.getElementById('cloudPasswordRecoveryPanel');
+    if(panel) panel.style.display='none';
+
+    // Remove recovery query/hash information from the address bar without reloading.
+    try{
+      history.replaceState({},document.title,window.location.pathname);
+    }catch(_e){}
+
+    setCloudStatus('Password changed successfully. Sign in with the new password.','ok');
+  }catch(e){
+    console.warn('Set new password failed:',e);
+    setCloudStatus('Could not change password: '+(e.message||'Request a new reset email and try again.'),'bad');
+  }
+}
+
 async function cloudCreateAccount(){
   const client=anuksSupabaseClient||initCloudClient();
   if(!client){
@@ -3796,22 +3921,25 @@ async function cloudCreateAccount(){
   }
 
   const email=(document.getElementById('cloudEmail')?.value||'').trim();
-  const password=(document.getElementById('cloudPassword')?.value||'').trim();
+  const password=document.getElementById('cloudPassword')?.value||'';
 
-  if(!email||!password){
-    setCloudStatus('Enter email and password to create an account.','bad');
+  if(!email){
+    setCloudStatus('Enter email to create an account.','bad');
+    return;
+  }
+  if(!password.trim()){
+    setCloudStatus('Enter password to create an account.','bad');
     return;
   }
 
   try{
-    const {data,error}=await client.auth.signUp({email,password});
+    const {data,error}=await client.auth.signUp({email,password,options:{emailRedirectTo:cloudAuthRedirectUrl()}});
     if(error) throw error;
 
     if(data?.user && !data.session){
-      setCloudStatus('Account created. Check your email to confirm the signup, then sign in.','ok');
+      setCloudStatus('Check your email to confirm the account, then sign in. If no email arrives, use Resend Confirmation Email.','ok');
       return;
     }
-
     if(!data?.session?.access_token || !data?.session?.user){
       anuksCloudUser=null;
       setCloudStatus('Account created, but no authenticated session was returned. Please sign in after confirming your email.','bad');
@@ -3837,10 +3965,33 @@ async function cloudCreateAccount(){
   }
 }
 
+async function cloudResendConfirmation(){
+  const client=anuksSupabaseClient||initCloudClient();
+  if(!client){
+    setCloudStatus('Cloud not configured. Enter your Supabase URL and anon public key first.','bad');
+    return;
+  }
+
+  const email=(document.getElementById('cloudEmail')?.value||'').trim();
+  if(!email){
+    setCloudStatus('Enter your email to resend the confirmation email.','bad');
+    return;
+  }
+
+  try{
+    const {error}=await client.auth.resend({type:'signup',email,options:{emailRedirectTo:cloudAuthRedirectUrl()}});
+    if(error) throw error;
+    setCloudStatus('Confirmation email requested. Check your inbox and spam folder.','ok');
+  }catch(e){
+    console.warn('Confirmation email resend failed:',e);
+    setCloudStatus('Could not resend confirmation email: '+(e.message||'Check Supabase email settings.'),'bad');
+  }
+}
+
 async function cloudSignUpOrSignIn(){
   return cloudSignIn();
 }
-async function cloudSignOut(){ const client=anuksSupabaseClient||initCloudClient(); if(!client)return; try{await client.auth.signOut(); anuksCloudUser=null; setCloudStatus('Signed out. Local saving still works.','');}catch(e){console.warn('Cloud sign out failed:',e); setCloudStatus('Sign out failed.','bad');} }
+async function cloudSignOut(){ document.getElementById('cloudPassword').value=''; anuksCloudUser=null; const client=anuksSupabaseClient||initCloudClient(); if(!client){setCloudStatus('Signed out. Login password cleared.','');return;} try{await client.auth.signOut(); setCloudStatus('Signed out. Login password cleared.','');}catch(e){console.warn('Cloud sign out failed:',e); setCloudStatus('Sign out failed. Login password cleared.','bad');} }
 function cloudDealKey(deal){ const parts=[deal?.name||'',deal?.submarket||'',deal?.inputs?.purchasePrice||'',deal?.inputs?.units||'',deal?.cap||'',deal?.ppu||'']; return parts.join('|').toLowerCase().replace(/\s+/g,' ').trim()||('deal-'+Date.now()); }
 async function getCloudUser(){
   const client=anuksSupabaseClient||initCloudClient();
@@ -4292,7 +4443,7 @@ console.log('Functions available:', {
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./service-worker.js?v=2026.09.16.cloud-sync-local-claim-v1', { updateViaCache: 'none' }).catch((err) => {
+    navigator.serviceWorker.register('./service-worker.js?v=2026.09.17.auth-recovery-cloud-final-v1', { updateViaCache: 'none' }).catch((err) => {
       console.error('Service worker registration failed:', err);
     });
   });
